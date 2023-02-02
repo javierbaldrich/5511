@@ -16,16 +16,12 @@ def trim_images(ids, train_dir):
         trimmed_imgs[ix] = new_img
     return trimmed_imgs
 
-
 root_dir = os.path.abspath(os.path.dirname(__file__))
 train_dir = os.path.abspath(os.path.join(root_dir, 'input', 'train'))
 test_dir = os.path.abspath(os.path.join(root_dir, 'input', 'test'))
 
-print(f'Loading CSV files.')
 train_df = pd.read_csv(os.path.join(root_dir, 'input', 'train_labels.csv'))
-print(f'Training dataset contains {train_df.shape[0]} records.')
 test_df = pd.read_csv(os.path.join(root_dir, 'input', 'sample_submission.csv'))
-print(f'Test dataset contains {test_df.shape[0]} records.')
 
 x_test = trim_images(ids=test_df['id'].to_list(), train_dir=test_dir)
 
@@ -49,6 +45,7 @@ model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy']
 model.fit(x_train, y_train, epochs=20, batch_size=1024)
 model.save('cancer_model')
 y_test = model.predict(x_test)
+
 y_test = np.where(y_test >= 0.5, 1, 0)
 test_df['label'] = y_test
 test_df.to_csv('y_test.csv', index=False)
