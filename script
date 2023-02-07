@@ -1,0 +1,72 @@
+import tensorflow as tf
+from tensorflow import keras
+from keras.layers import Dense, Conv2D, MaxPooling2D, Flatten, Dropout, BatchNormalization
+import pandas as pd
+import numpy as np
+import os
+from skimage import io, transform
+
+
+def positional_processing(ids, input_size, dir, is_train):
+    processed_imgs = np.ndarray(shape=(len(ids), input_size, input_size, 3), dtype=float)/255
+    for ix, id in enumerate(ids):
+        image = io.imread(os.path.join(dir, id + '.tif'))
+        if is_train:
+            # Rotation
+            image = transform.rotate(image, np.random.choice([0, 90, 180, 270]), preserve_range=True).astype(np.uint8)
+            # Flip
+            if(np.random.choice([True, False])):
+                image = image[::-1, :]
+            if(np.random.choice([True, False])):
+                image = image[:, ::-1]
+        # Crop
+        new_img = image[int((96-input_size)/2):int((96-input_size)/2)+input_size, int((96-input_size)/2):int((96-input_size)/2)+input_size, :]
+        processed_imgs[ix] = new_img
+    return processed_imgs
+
+faulty_ids = [
+    '9369c7278ec8bcc6c880d99194de09fc2bd4efbe', 
+    'f6f1d771d14f7129a6c3ac2c220d90992c30c10b', 
+    '9071b424ec2e84deeb59b54d2450a6d0172cf701', 
+    'c448cd6574108cf14514ad5bc27c0b2c97fc1a83', 
+    '54df3640d17119486e5c5f98019d2a92736feabc', 
+    '5f30d325d895d873d3e72a82ffc0101c45cba4a8', 
+    '5a268c0241b8510465cb002c4452d63fec71028a'
+]
+
+root_dir = os.path.abspath(os.path.dirname(__file__))
+test_dir = os.path.join(root_dir, 'input', 'test')
+test_df = pd.read_csv(os.path.join(root_dir, 'input', 'sample_submission.csv'))
+
+train_dir = os.path.join(root_dir, 'input', 'train')
+train_df = pd.read_csv(os.path.join(root_dir, 'input', 'train_labels.csv'))
+train_df = train_df[~train_df['id'].isin(faulty_ids)]
+y_train = train_df['label'].astype(float).to_numpy()
+
+input_size = 32
+
+x_test = positional_processing(test_df['id'].to_list(), input_size, test_dir, False)
+x_train = positional_processing(train_df['id'].to_list(), input_size, train_dir, True)
+
+model = keras.Sequential()
+model.add(Conv2D(64, (3, 3), activation="relu", input_shape = (input_size, input_size, 3)))
+model.add(Conv2D(64, (3, 3), activation="relu"))
+model.add(MaxPooling2D((2, 2)))
+model.add(Conv2D(64, (3, 3), activation="relu"))
+model.add(Conv2D(64, (3, 3), activation="relu"))
+model.add(MaxPooling2D((2, 2)))
+model.add(Dropout(0.75))
+model.add(Flatten())
+model.add(Dense(32, activation="relu"))
+model.add(Dropout(0.1))
+model.add(Dense(16, activation="relu"))
+model.add(Dropout(0.1))
+model.add(Dense(1, activation="sigmoid"))
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+history = model.fit(x_train, y_train, epochs=64, batch_size=4096)
+model.save('cancer_model')
+
+y_test = model.predict(x_test)
+y_test = np.where(y_test >= 0.5, 1, 0)
+test_df['label'] = y_test
+test_df.to_csv(f'y_test.csv', index=False)
