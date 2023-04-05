@@ -1,28 +1,16 @@
 import tensorflow as tf
 from tensorflow import keras
-from keras.layers import Dense, Conv2D, MaxPooling2D, Flatten, Dropout, BatchNormalization
+from keras.layers import Input, Dense, Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Dropout, BatchNormalization, Activation
+from keras.activations import relu, sigmoid
+from keras.optimizers import Adam
+import keras_tuner
 import pandas as pd
 import numpy as np
 import os
-from skimage import io, transform
-
-
-def positional_processing(ids, input_size, dir, is_train):
-    processed_imgs = np.ndarray(shape=(len(ids), input_size, input_size, 3), dtype=float)/255
-    for ix, id in enumerate(ids):
-        image = io.imread(os.path.join(dir, id + '.tif'))
-        if is_train:
-            # Rotation
-            image = transform.rotate(image, np.random.choice([0, 90, 180, 270]), preserve_range=True).astype(np.uint8)
-            # Flip
-            if(np.random.choice([True, False])):
-                image = image[::-1, :]
-            if(np.random.choice([True, False])):
-                image = image[:, ::-1]
-        # Crop
-        new_img = image[int((96-input_size)/2):int((96-input_size)/2)+input_size, int((96-input_size)/2):int((96-input_size)/2)+input_size, :]
-        processed_imgs[ix] = new_img
-    return processed_imgs
+from sklearn.model_selection import train_test_split
+from keras.preprocessing.image import ImageDataGenerator
+from PIL import Image
+import math
 
 faulty_ids = [
     '9369c7278ec8bcc6c880d99194de09fc2bd4efbe', 
@@ -35,38 +23,69 @@ faulty_ids = [
 ]
 
 root_dir = os.path.abspath(os.path.dirname(__file__))
-test_dir = os.path.join(root_dir, 'input', 'test')
 test_df = pd.read_csv(os.path.join(root_dir, 'input', 'sample_submission.csv'))
-
-train_dir = os.path.join(root_dir, 'input', 'train')
+x_test = test_df['id'].astype(str).to_numpy()
+test_img_names = test_df['id'].astype(str).to_numpy()
 train_df = pd.read_csv(os.path.join(root_dir, 'input', 'train_labels.csv'))
 train_df = train_df[~train_df['id'].isin(faulty_ids)]
+train_img_names = train_df['id'].astype(str).to_numpy()
 y_train = train_df['label'].astype(float).to_numpy()
+x_train, x_val, y_train, y_val = train_test_split(train_img_names, y_train, test_size=0.20, random_state=453)
 
-input_size = 32
+train_datagen = ImageDataGenerator( 
+    rescale=1. / 255, 
+    horizontal_flip=True,
+    vertical_flip=True
+    ) 
+test_datagen = ImageDataGenerator(rescale=1. / 255) 
 
-x_test = positional_processing(test_df['id'].to_list(), input_size, test_dir, False)
-x_train = positional_processing(train_df['id'].to_list(), input_size, train_dir, True)
-
+# Input
 model = keras.Sequential()
-model.add(Conv2D(64, (3, 3), activation="relu", input_shape = (input_size, input_size, 3)))
-model.add(Conv2D(64, (3, 3), activation="relu"))
-model.add(MaxPooling2D((2, 2)))
-model.add(Conv2D(64, (3, 3), activation="relu"))
-model.add(Conv2D(64, (3, 3), activation="relu"))
-model.add(MaxPooling2D((2, 2)))
-model.add(Dropout(0.75))
+model.add(Input(shape=(96, 96, 3)))
+# Feature extractor
+model.add(Conv2D(128, (3, 3)))
+model.add(Activation(relu))
+model.add(MaxPooling2D())
+model.add(Activation(relu))
+model.add(Conv2D(64, (3, 3)))
+model.add(Activation(relu))
+model.add(MaxPooling2D())
+model.add(Activation(relu))
+model.add(Conv2D(64, (3, 3)))
+model.add(Activation(relu))
+model.add(MaxPooling2D())
+model.add(Activation(relu))
+# Classifier
 model.add(Flatten())
-model.add(Dense(32, activation="relu"))
-model.add(Dropout(0.1))
-model.add(Dense(16, activation="relu"))
-model.add(Dropout(0.1))
-model.add(Dense(1, activation="sigmoid"))
-model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-history = model.fit(x_train, y_train, epochs=64, batch_size=4096)
-model.save('cancer_model')
+model.add(Dense(32))
+model.add(Activation(relu))
+model.add(Dense(32))
+model.add(Activation(relu))
+model.add(Dense(32))
+model.add(Activation(relu))
+model.add(Dense(1))
+model.add(Activation(sigmoid))
+# Compilation
+model.compile(
+    loss='binary_crossentropy', 
+    optimizer=Adam(learning_rate = 0.00032837213634908643), 
+    metrics=['accuracy']
+)
 
-y_test = model.predict(x_test)
-y_test = np.where(y_test >= 0.5, 1, 0)
-test_df['label'] = y_test
-test_df.to_csv(f'y_test.csv', index=False)
+train_generator = train_datagen.flow_from_directory( 
+    os.path.join(root_dir, 'input', f'train_labeled'), 
+    target_size=(96, 96), 
+    batch_size=64, 
+    class_mode='binary'
+) 
+test_generator = test_datagen.flow_from_directory( 
+    os.path.join(root_dir, 'input', f'test_original'), 
+    target_size=(96, 96), 
+    batch_size=64, 
+    class_mode=None,
+    shuffle=False
+) 
+model.fit(
+        train_generator,
+        epochs=16)
+model.save('cancer_model')
